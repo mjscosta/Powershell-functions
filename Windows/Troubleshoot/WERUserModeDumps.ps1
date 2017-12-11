@@ -109,24 +109,23 @@ function Enable-WERUserModeDumps
     }
     Process
     {
-        foreach ($Computer in $ComputerName)
-        {
-            Write-Verbose "Processing computer '$Computer'..."
+        Write-Verbose "ComputerName: $ComputerName"
+        If ($ComputerName -eq 'localhost') {
+            Write-Verbose "Processing local computer."
 
             Write-Verbose "->`tChecking DumpFolder existence..."
             Try
             {
                 If ($DumpFolder -ne '%LOCALAPPDATA%\CrashDumps')
                 {
-                    $DumpFolderUNC = "\\$Computer\$($DumpFolder.Replace(':','$'))"
-                    If (Test-Path $DumpFolderUNC)
+                    If (Test-Path $DumpFolder)
                     {
                         Write-Verbose "->`tFolder '$DumpFolder' already exists."
                     }
                     else
                     {
                         Write-Verbose "->`tCreating folder '$DumpFolder'..."
-                        $Folder = New-Item $DumpFolderUNC -ItemType Directory -ea 1
+                        $Folder = New-Item $DumpFolder -ItemType Directory -ea 1
                         Write-Verbose "->`tFolder created."
                     }
                 }
@@ -139,7 +138,7 @@ function Enable-WERUserModeDumps
             Write-Verbose "->`tConnecting to registry..."
             try
             {
-                $Reg = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $Computer)
+                $Reg =  $Reg = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Default)
                 Write-Verbose "->`tConnection established."
             }
             catch
@@ -193,7 +192,7 @@ function Enable-WERUserModeDumps
             }
             $Reg.Close()
             Write-Verbose "->`tRegistry connection closed."
-            $WerSVC = Get-Service WerSvc -ComputerName $Computer
+            $WerSVC = Get-Service WerSvc
             If ($WerSVC.Status -eq 'Running')
             {
                 Write-Verbose "->`tRestarting WER Service (WerSvc)..."
@@ -213,7 +212,115 @@ function Enable-WERUserModeDumps
                 }
             }
             Write-Verbose "Finished processing computer."
-        } #end foreach computer
+
+        } #else {
+        else {
+            foreach ($Computer in $ComputerName)
+            {
+                Write-Verbose "Processing computer '$Computer'..."
+
+                Write-Verbose "->`tChecking DumpFolder existence..."
+                Try
+                {
+                    If ($DumpFolder -ne '%LOCALAPPDATA%\CrashDumps')
+                    {
+                        $DumpFolderUNC = "\\$Computer\$($DumpFolder.Replace(':','$'))"
+                        If (Test-Path $DumpFolderUNC)
+                        {
+                            Write-Verbose "->`tFolder '$DumpFolder' already exists."
+                        }
+                        else
+                        {
+                            Write-Verbose "->`tCreating folder '$DumpFolder'..."
+                            $Folder = New-Item $DumpFolderUNC -ItemType Directory -ea 1
+                            Write-Verbose "->`tFolder created."
+                        }
+                    }
+                }
+                catch
+                {
+                    Write-Error $_
+                    continue
+                }
+                Write-Verbose "->`tConnecting to registry..."
+                try
+                {
+                    $Reg = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $Computer)
+                    Write-Verbose "->`tConnection established."
+                }
+                catch
+                {
+                    Write-Error $_
+                    continue
+                }
+                try
+                {
+                    $Key = $Reg.OpenSubKey('SOFTWARE\Microsoft\Windows\Windows Error Reporting',$true)
+                    If ($Key.GetSubKeyNames() -notcontains 'LocalDumps')
+                    {
+                        Write-Verbose "->`tCreating LocalDumps registry key..."
+                        $Null = $Key.CreateSubKey('LocalDumps')
+                        Write-Verbose "->`tKey created."
+                    }
+                    else
+                    {
+                        Write-Verbose "->`tKey already exists."
+                    }
+                    $DumpKey = $Key.OpenSubKey('LocalDumps',$true)
+                    If ($Process)
+                    {
+                        If ($DumpKey.GetSubKeyNames() -notcontains $Process)
+                        {
+                            Write-Verbose "->`tCreating '$Process' subkey..."
+                            $null = $DumpKey.CreateSubKey($Process)
+                            Write-Verbose "->`tSubkey created."
+                        }
+                        $DumpKey = $DumpKey.OpenSubKey($Process,$true)
+                    }
+                    Write-Verbose "->`tSetting values for User-Mode dumps..."
+                    $Null = $DumpKey.SetValue('DumpFolder', $DumpFolder, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+                    Write-Verbose "`t->`tDumpFolder value set to '$DumpFolder'"
+                    $Null = $DumpKey.SetValue('DumpCount', $DumpCount, [Microsoft.Win32.RegistryValueKind]::DWORD)
+                    Write-Verbose "`t->`tDumpCount value set to '$DumpCount'"
+                    $Null = $DumpKey.SetValue('DumpType', $DumpTypeData, [Microsoft.Win32.RegistryValueKind]::DWORD)
+                    Write-Verbose "`t->`tDumpType value set to '$DumpTypeData'"
+                    If ($DumpType -eq 'CustomDump')
+                    {
+                        $Null = $DumpKey.SetValue('CustomDumpFlags', $CustomDumpFlags, [Microsoft.Win32.RegistryValueKind]::DWORD)
+                        Write-Verbose "->`t`tCustomDumpFlags value set to '$CustomDumpFlags'"
+                    }
+                    Write-Verbose "->`tAll required values were set."
+                }
+                catch
+                {
+                    Write-Error $_
+                    $Reg.Close()
+                    continue
+                }
+                $Reg.Close()
+                Write-Verbose "->`tRegistry connection closed."
+                $WerSVC = Get-Service WerSvc -ComputerName $Computer
+                If ($WerSVC.Status -eq 'Running')
+                {
+                    Write-Verbose "->`tRestarting WER Service (WerSvc)..."
+                    $WerSVC | Restart-Service
+                    If ($?)
+                    {
+                        Write-Verbose "->`tService restarted."
+                    }
+                }
+                else
+                {
+                    Write-Verbose "->`tStarting WER Service (WerSvc)..."
+                    $WerSVC | Start-Service
+                    If ($?)
+                    {
+                        Write-Verbose "->`tService started."
+                    }
+                }
+                Write-Verbose "Finished processing computer."
+            } #end foreach computer
+        }
     }
     End
     {
